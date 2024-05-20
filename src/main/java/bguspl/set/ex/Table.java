@@ -3,9 +3,16 @@ package bguspl.set.ex;
 import bguspl.set.Env;
 
 import java.util.Arrays;
+import java.util.LinkedList;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
+
+import org.w3c.dom.views.AbstractView;
+
+import bguspl.set.UserInterface;
 
 /**
  * This class contains the data that is visible to the player.
@@ -29,6 +36,21 @@ public class Table {
      */
     protected final Integer[] cardToSlot; // slot per card (if any)
 
+     /**
+     * Mapping between a card and the slot it is in (null if none).
+     */
+    protected final Boolean[][] tokens; // slot per card (if any)
+
+    protected AtomicBoolean removingCards;
+
+    protected int activePlayers;
+    protected int activeDealer;
+    protected int waitingDealer;
+
+
+
+
+
     /**
      * Constructor for testing.
      *
@@ -41,6 +63,21 @@ public class Table {
         this.env = env;
         this.slotToCard = slotToCard;
         this.cardToSlot = cardToSlot;
+        this.tokens = new Boolean[slotToCard.length][env.config.players];
+        this.removingCards=new AtomicBoolean(false);
+        this.activeDealer=0;
+        this.activePlayers=0;
+        this.waitingDealer=0;
+        for(int i=0; i<tokens.length; i++){
+            for(int j=0; j<tokens[0].length; j++){
+                tokens[i][j]=false;
+            }
+        }
+        for(Integer slot: slotToCard)
+            slot = null;
+        for(Integer card: cardToSlot)
+            card=null;
+        
     }
 
     /**
@@ -89,11 +126,10 @@ public class Table {
     public void placeCard(int card, int slot) {
         try {
             Thread.sleep(env.config.tableDelayMillis);
-        } catch (InterruptedException ignored) {}
-
+        } catch (InterruptedException ignored) {};
         cardToSlot[card] = slot;
         slotToCard[slot] = card;
-
+        env.ui.placeCard(card, slot);
         // TODO implement
     }
 
@@ -104,10 +140,14 @@ public class Table {
     public void removeCard(int slot) {
         try {
             Thread.sleep(env.config.tableDelayMillis);
-        } catch (InterruptedException ignored) {}
+        } catch (InterruptedException ignored) {};
+        int card = slotToCard[slot];
+        slotToCard[slot] = null;
+        cardToSlot[card] = null;
+        env.ui.removeCard(slot);
+        }
 
         // TODO implement
-    }
 
     /**
      * Places a player token on a grid slot.
@@ -115,7 +155,8 @@ public class Table {
      * @param slot   - the slot on which to place the token.
      */
     public void placeToken(int player, int slot) {
-        // TODO implement
+        tokens[slot][player]=true;
+        env.ui.placeToken(player, slot);
     }
 
     /**
@@ -125,7 +166,65 @@ public class Table {
      * @return       - true iff a token was successfully removed.
      */
     public boolean removeToken(int player, int slot) {
-        // TODO implement
+        if(tokens[slot][player]==true){
+            tokens[slot][player]=false;
+            env.ui.removeToken(player, slot); //need to check if requiers a pre-check if there's a token
+            return true;
+        }
         return false;
     }
+
+     public int getCard(int slot) {
+        if(slot<0 || slot>slotToCard.length){
+            throw new IllegalArgumentException("slot does not exist");
+        }
+        if(slotToCard[slot]==null)
+            return -1;
+        return slotToCard[slot];
+    }
+
+    public void clearCards(){
+        for(int i=0; i<env.config.tableSize; i++){
+            slotToCard[i] = null;
+            env.ui.removeCard(i);
+
+        }
+        for(int i=0; i<env.config.deckSize; i++){
+            cardToSlot[i] = null;
+        }
+    }
+
+
+    //------READER-WRITER-LOCK-------//
+    protected synchronized void beforeRead() {
+        while (!(waitingDealer == 0 && activeDealer == 0))
+        try{
+            wait();
+        }
+        catch(InterruptedException e){break;};
+        activePlayers++;
+    }
+    
+    protected synchronized void afterRead() {
+        activePlayers--;
+        notifyAll();
+    }
+    
+    protected synchronized void beforeWrite() {
+        waitingDealer=1;
+        while (!(activePlayers == 0 && activeDealer == 0))
+        try{
+            wait();
+        }
+        catch(InterruptedException e){break;};
+        waitingDealer=0;
+        activeDealer=1;
+    }
+    
+    protected synchronized void afterWrite() {
+        activeDealer=0;
+        notifyAll();
+    }    
+
+
 }
